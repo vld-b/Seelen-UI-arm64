@@ -6,6 +6,7 @@ node_modules
 .env
 target
 gen
+flamegraph.svg
 
 # Submission Files
 /scripts/SBTemp

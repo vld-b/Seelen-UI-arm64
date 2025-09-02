@@ -1,8 +1,10 @@
 use std::{
-    io::{BufRead, Write},
+    io::{BufReader, Read, Write},
     net::{TcpListener, TcpStream},
     path::PathBuf,
 };
+
+use itertools::Itertools;
 
 use crate::{
     cli::actions::SvcMessage, error::Result, task_scheduler::TaskSchedulerHelper,
@@ -46,14 +48,36 @@ impl TcpService {
         Ok(dir.join("slu_service_tcp_socket"))
     }
 
-    fn handle_message(stream: TcpStream) -> Result<()> {
-        stream.set_read_timeout(Some(std::time::Duration::from_millis(1000)))?;
 
+    // Read buffer functon, architecture specific
+    #[cfg(target_arch = "x86_64")]
+    fn read_buffer(bufrdr: &BufReader<&TcpStream>) -> Result<Vec<u8>> {
         let mut bytes = Vec::new();
-        let mut reader = std::io::BufReader::new(&stream);
-        reader.read_until(0x17, &mut bytes)?; // Read until end of transmission block
+        bufrdr.read_until(0x17, &mut bytes)?; // Read until end of transmission block
         bytes.pop(); // Remove end of transmission block
-        let message: SvcMessage = serde_json::from_slice(&bytes)?;
+        Ok(bytes)
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    fn read_buffer(bufrdr: &BufReader<&TcpStream>) -> Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        // Loop over bytes in buffer
+        for byte in bufrdr.buffer() {
+            if *byte == 0x17 as u8 {
+                break; // Break when on end of transmission block
+            }
+            bytes.push(*byte);
+        }
+        Ok(bytes)
+    }
+
+    fn handle_message(stream: TcpStream) -> Result<()> {
+        stream.set_read_timeout(Some(std::time::Duration::from_millis(5000)))?;
+
+        let mut reader = BufReader::new(&stream);   
+        let bytes = Self::read_buffer(&reader)?;
+        log::info!("Received Command Blocks: {:?}", bytes.len());
+        let message: SvcMessage = serde_json::from_reader(&stream)?;
         log::trace!("TCP command received: {:?}", message.action);
 
         if message.token != Self::token() {
